@@ -7,6 +7,7 @@ import type {
   RenderOpts,
   Segment,
   CacheNodeSeedData,
+  PreloadCallbacks,
 } from './types'
 import type { StaticGenerationStore } from '../../client/components/static-generation-async-storage.external'
 import type { RequestStore } from '../../client/components/request-async-storage.external'
@@ -339,6 +340,8 @@ async function generateFlight(
     flightRouterState,
   } = ctx
 
+  const preloadCallbacks: PreloadCallbacks = []
+
   if (!options?.skipFlight) {
     const [MetadataTree, MetadataOutlet] = createMetadataComponents({
       tree: loaderTree,
@@ -370,6 +373,7 @@ async function generateFlight(
         rootLayoutIncluded: false,
         asNotFound: ctx.isNotFoundPath || options?.asNotFound,
         metadataOutlet: <MetadataOutlet />,
+        preloadCallbacks,
       })
     ).map((path) => path.slice(1)) // remove the '' (root) segment
   }
@@ -502,6 +506,8 @@ async function getRootAppProps(
     createDynamicallyTrackedSearchParams,
   })
 
+  const preloadCallbacks: PreloadCallbacks = []
+
   const { seedData, styles } = await createComponentTree({
     ctx,
     createSegmentPath: (child) => child,
@@ -515,6 +521,7 @@ async function getRootAppProps(
     asNotFound: asNotFound,
     metadataOutlet: <MetadataOutlet />,
     missingSlots,
+    preloadCallbacks,
   })
 
   // When the `vary` response header is present with `Next-URL`, that means there's a chance
@@ -527,10 +534,13 @@ async function getRootAppProps(
   const initialHead = (
     <>
       <NonIndex ctx={ctx} />
+      {/* Adding requestId as react key to make metadata remount for each render */}
+      <MetadataTree key={ctx.requestId} />
     </>
   )
 
   return {
+    P: <Preloads preloadCallbacks={preloadCallbacks} />,
     b: ctx.renderOpts.buildId,
     p: ctx.assetPrefix,
     c: url.pathname + url.search,
@@ -542,7 +552,18 @@ async function getRootAppProps(
     l: styles,
     m: missingSlots,
     G: GlobalError,
-  } as InitialRSCPayload
+  } as InitialRSCPayload & { P: React.ReactNode }
+}
+
+/**
+ * Preload calls (such as `ReactDOM.preloadStyle` and `ReactDOM.preloadFont`) need to be called during rendering
+ * in order to create the appropriate preload tags in the DOM, otherwise they're a no-op. Since we invoke
+ * renderToReadableStream with a function that returns component props rather than a component itself, we use
+ * this component to "render  " the preload calls.
+ */
+function Preloads({ preloadCallbacks }: { preloadCallbacks: Function[] }) {
+  preloadCallbacks.forEach((preloadFn) => preloadFn())
+  return null
 }
 
 // This is the root component that runs in the RSC context
